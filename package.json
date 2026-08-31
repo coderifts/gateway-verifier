@@ -1,0 +1,11 @@
+{
+  "name": "@coderifts/gateway-verifier",
+  "version": "0.1.0",
+  "description": "Reject an API request unless it carries a CodeRifts receipt that verifies and whose scope matches the request. Customer-hosted, offline, zero dependencies.",
+  "license": "Apache-2.0",
+  "main": "src/index.js",
+  "files": ["src", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test test/*.test.js" },
+  "dependencies": {}
+}
