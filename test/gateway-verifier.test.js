@@ -106,9 +106,13 @@ describe('gateway verifier — a valid, in-scope receipt is admitted', () => {
 // ── A RECEIPT'S PRESENCE IS NOT A PASS ───────────────────────────────────────
 describe('gateway verifier — presence is not a pass', () => {
   it('no receipt header → receipt_missing', () => {
+    // The VERDICT fields, not the whole object: a deny now also carries an
+    // additive `remedy` naming the next step. deny-remedy.test.js pins that the
+    // verdict half is byte-identical to what this asserted before.
     for (const h of [{}, { 'x-coderifts-receipt': '' }]) {
-      assert.deepEqual(checkRequest({ headers: h, intended: INTENT, keyring }),
-        { allow: false, reason: REASON.RECEIPT_MISSING });
+      const v = checkRequest({ headers: h, intended: INTENT, keyring });
+      assert.equal(v.allow, false);
+      assert.equal(v.reason, REASON.RECEIPT_MISSING);
     }
   });
 

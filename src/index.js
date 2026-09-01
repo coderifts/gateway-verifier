@@ -38,6 +38,7 @@
 
 const { verifyReceipt } = require('./verify.js');
 const { unwrapReceiptInput } = require('./from-dsse.js');
+const { buildDenyRemedy, denyErrorForReason } = require('./deny-remedy.js');
 
 /** Header names. Overridable, because a gateway may already own a prefix. */
 const DEFAULT_HEADERS = Object.freeze({
@@ -69,7 +70,23 @@ const REASON = Object.freeze({
   VERIFIER_THREW: 'verifier_threw',
 });
 
-const deny = (reason, detail) => ({ allow: false, reason, ...(detail ? { detail } : {}) });
+/**
+ * A refusal, plus the next step when this refusal has one.
+ *
+ * The remedy is ADDITIVE and attached after the verdict: `allow` and `reason`
+ * are byte-identical to what this returned before it existed, so a caller that
+ * branches on them is unaffected. A reason that maps to no error class carries
+ * no remedy rather than a guessed one.
+ */
+const deny = (reason, detail, remedyFields) => {
+  const out = { allow: false, reason, ...(detail ? { detail } : {}) };
+  const error = denyErrorForReason(reason);
+  if (error) {
+    const remedy = buildDenyRemedy({ error, ...(remedyFields || {}) });
+    if (remedy) out.remedy = remedy;
+  }
+  return out;
+};
 
 /** Case-insensitive header read that works on a plain object or a Headers-like. */
 function headerValue(headers, name) {
@@ -150,7 +167,12 @@ function scopeMatches(envelope, intended) {
  */
 function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADERS, now } = {}) {
   const rawReceipt = headerValue(headers, headerNames.receipt);
-  if (rawReceipt == null || rawReceipt === '') return deny(REASON.RECEIPT_MISSING);
+  const targetOf = (i) => (i && typeof i === 'object' && typeof i.target_uri === 'string'
+    ? i.target_uri : null);
+  if (rawReceipt == null || rawReceipt === '') {
+    // No receipt was presented, so there is no fingerprint to report.
+    return deny(REASON.RECEIPT_MISSING, undefined, { target: targetOf(intended) });
+  }
 
   // Unwrap FIRST, verify after. Unwrapping checks no signature — a DSSE
   // envelope reaching this line has proven nothing yet.
@@ -176,7 +198,11 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
     return deny(REASON.VERIFIER_THREW, String((err && err.message) || 'unknown').slice(0, 200));
   }
   if (!result || result.valid !== true) {
-    return deny(REASON.RECEIPT_INVALID, result ? result.status : null);
+    return deny(REASON.RECEIPT_INVALID, result ? result.status : null, {
+      target: targetOf(intended),
+      fingerprint: typeof envelope.fingerprint === 'string' ? envelope.fingerprint : null,
+      observed: { receipt_status: result ? result.status : null },
+    });
   }
 
   const executionAction = typeof envelope.execution_action === 'string' ? envelope.execution_action : null;
@@ -185,7 +211,24 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
   }
 
   const scope = scopeMatches(envelope, intended);
-  if (!scope.ok) return { allow: false, reason: scope.reason, ...(scope.mismatches ? { mismatches: scope.mismatches } : {}) };
+  if (!scope.ok) {
+    const out = {
+      allow: false,
+      reason: scope.reason,
+      ...(scope.mismatches ? { mismatches: scope.mismatches } : {}),
+    };
+    const error = denyErrorForReason(scope.reason);
+    if (error) {
+      const remedy = buildDenyRemedy({
+        error,
+        target: targetOf(intended),
+        fingerprint: typeof envelope.fingerprint === 'string' ? envelope.fingerprint : null,
+        observed: scope.mismatches ? { mismatches: scope.mismatches } : undefined,
+      });
+      if (remedy) out.remedy = remedy;
+    }
+    return out;
+  }
 
   return {
     allow: true,
