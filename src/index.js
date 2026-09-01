@@ -15,7 +15,7 @@
  * ── THE FLOW, mirroring the Contract Gate ───────────────────────────────────
  *     read the receipt header
  *  -> unwrap a DSSE envelope if that is what arrived
- *  -> verifyReceipt(token, { keyring }, { envelope, now })   ← the same checks
+ *  -> verifyReceipt(token, { ctx: { keyring }, envelope, now })   ← the same checks
  *  -> the decision must be a passing execution_action
  *  -> the scope must match THIS request
  *  -> otherwise 403 with a named reason
@@ -193,7 +193,7 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
   try {
     // The same call the Contract Gate makes. Passing the envelope activates the
     // body-hash binding, which is what makes the scope check below meaningful.
-    result = verifyReceipt(unwrapped.token, { keyring, expectedKid: null }, { envelope, now });
+    result = verifyReceipt(unwrapped.token, { ctx: { keyring, expectedKid: null }, envelope, now });
   } catch (err) {
     return deny(REASON.VERIFIER_THREW, String((err && err.message) || 'unknown').slice(0, 200));
   }

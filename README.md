@@ -111,8 +111,12 @@ CodeRifts on the request path and no CodeRifts-operated service in the loop —
 verification is a local signature check. If CodeRifts is unreachable, or gone,
 this keeps working.
 
-The verify core (`src/verify.js`, `src/from-dsse.js`) is **vendored**: copied in,
-not imported, so the artifact you audit is the artifact that runs.
+The verify core (`src/verify.js`, `src/arity.js`, `src/from-dsse.js`) is
+**vendored**: copied in, not imported, so the artifact you audit is the artifact
+that runs. The copied revision and the SHA-256 of each file are recorded in
+[`VENDOR.md`](VENDOR.md) and `src/VENDOR.sha256`; `test/vendor-core.test.js`
+fails if either file drifts from its pin, and separately re-checks the key-status
+behaviour the pin exists to protect.
 
 ## Tests
 

@@ -4,17 +4,19 @@
 /*
  * CodeRifts chain-receipt verifier -- Node >= 20, zero dependencies (node:crypto only).
  *
- * Verifies an Ed25519-signed CodeRifts chain_receipt WITHOUT trusting the CodeRifts
- * service. The reference format is frozen in ./RECEIPT_FORMAT.md.
+ * Verify the receipt yourself — offline, no live CodeRifts API call needed.
+ * The reference format is frozen in ./RECEIPT_FORMAT.md.
  *
  * Usage:
  *   node verify.js <receipt> [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]
  *   node verify.js --chain receipts.txt [--key pub.pem | --keys <url|file>] [--kid <kid>] [--fetch <url>]
  *
- * Key discovery: with no --key/--keys, the public key is fetched from
- *   https://app.coderifts.com/api/v1/attestation/public-key  (override with --fetch <url>).
+ * Key discovery: with no --key/--keys, keys are fetched from
+ *   https://app.coderifts.com/.well-known/coderifts-keys.json  (override with --fetch <url>).
+ * The fetch-and-resolve path accepts BOTH the registry array (active + retired)
+ * and the legacy single-key body from /api/v1/attestation/public-key.
  * --keys resolves each receipt's key by kid from a registry
- *   ({ keys: [{ kid, public_key_pem, status, valid_from }] }); accepts a URL or file.
+ *   ({ keys: [{ kid, public_key_pem, status, valid_from, retired_at }] }); accepts a URL or file.
  *
  * Output: JSON { valid, reason?, payload?, chain? } to stdout.
  * Exit codes: 0 valid, 1 invalid, 2 usage error.
@@ -26,23 +28,23 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { split3ary } = require('./arity');
 
-const DEFAULT_FETCH_URL = 'https://app.coderifts.com/api/v1/attestation/public-key';
+const DEFAULT_FETCH_URL = 'https://app.coderifts.com/.well-known/coderifts-keys.json';
 const SIGNING_PREFIX = 'crchain.v1';
 const MAX_SUPPORTED_V = 4;
 /** ID104 — verification expiry leeway (ms). `exp + leeway < now` → VERIFIED_EXPIRED. */
 const CLOCK_SKEW_LEEWAY_MS = 30_000;
 
 /**
- * 0s grace only when context DECLARES destructive AND production. This vendored gate copy
- * has no `destructive` / `operation_class` input — never guess from operation labels — so
- * the leeway is constant here, matching the public verifier.
+ * 0s grace only when context DECLARES destructive AND production.
+ * Public verifier has `--environment` / envelope.environment; no `destructive`
+ * / `operation_class` field — never guess from operation labels.
  */
 function expiryLeewayMs(_context) {
   return CLOCK_SKEW_LEEWAY_MS;
 }
 
-/** Verification-only: equality is CURRENT; only exp + leeway strictly before now is expired. */
 function isExpiredAt(expiresAtMs, nowMs, context) {
   if (!Number.isFinite(expiresAtMs) || !Number.isFinite(nowMs)) return false;
   return (expiresAtMs + expiryLeewayMs(context)) < nowMs;
@@ -111,7 +113,7 @@ function resolveEntry(ctx, payload) {
     return entry; // { publicKey, status, retired_at }
   }
   if (ctx.expectedKid !== null && payload.kid !== ctx.expectedKid) return null;
-  return { publicKey: ctx.publicKey, status: null, retired_at: null };
+  return { publicKey: ctx.publicKey, status: null, retired_at: null, revoked_at: null, compromised_at: null };
 }
 
 /**
@@ -126,6 +128,51 @@ function resolveEntry(ctx, payload) {
  */
 function deriveStatus(payload, entry, opts) {
   if (typeof payload.v === 'number' && payload.v > MAX_SUPPORTED_V) return 'UNSUPPORTED_VERSION';
+  // FAIL CLOSED ON A STATUS WE DO NOT UNDERSTAND.
+  //
+  // MEASURED 2026-08-26: a registry entry with status "revoked" returned
+  // { valid: true, status: "VERIFIED_CURRENT" } here — the status was read for 'retired' and
+  // otherwise ignored, so anything else fell through to the healthy path. An operator who marked a
+  // stolen key revoked would have believed they had acted while this verifier kept accepting it.
+  // The app kernel and verify-attest/verify-toolset already reject an unknown status; these two
+  // did not, so the fleet disagreed about the same registry.
+  //
+  // This is a bug fix, not revocation: the revocation RULE (compromised_at, REVOKED_KEY /
+  // REVOKED_KEY_UNDECIDABLE) is a separate, larger change across eight verifiers. What lands here
+  // is only the direction of the unknown case. Safe by measurement: the live registry publishes
+  // 'active' only, so no real consumer changes behaviour.
+  const KNOWN_STATUSES = new Set(['active', 'retired', 'revoked', null, undefined]);
+  if (!KNOWN_STATUSES.has(entry.status)) {
+    return 'UNKNOWN_KEY_STATUS';
+  }
+  // 1079 B — OPTIONAL timestamps, additive. Absent both fields → this function continues
+  // exactly as before. Signing time is payload.ts (receipts have no iat).
+  // revoked_at = compromise: EVERY receipt under the key is invalid, including those
+  // whose ts predates revoked_at (the attacker chooses ts).
+  // retired_at = planned rotation: ts < retired_at stays on the existing path;
+  // ts >= retired_at is KEY_RETIRED_AFTER_SIGNING.
+  if (typeof entry.revoked_at === 'string' && entry.revoked_at.length > 0) {
+    return 'KEY_REVOKED';
+  }
+  if (typeof entry.retired_at === 'string' && entry.retired_at.length > 0 && payload.ts) {
+    const issued = Date.parse(payload.ts);
+    const retired = Date.parse(entry.retired_at);
+    if (Number.isFinite(issued) && Number.isFinite(retired) && issued >= retired) {
+      return 'KEY_RETIRED_AFTER_SIGNING';
+    }
+  }
+  // REVOKED — RECEIPT_FORMAT.md §7.1 (normative). The attacker chooses ts, so no timestamp may
+  // rehabilitate a revoked key's signature: BOTH outcomes are valid:false. UNDECIDABLE is not a
+  // softer valid; it reports that we cannot tell a legitimate pre-compromise receipt from a
+  // backdated forgery. A missing compromised_at means the whole key history is suspect.
+  if (entry.status === 'revoked') {
+    const at = entry.compromised_at;
+    if (typeof at !== 'string' || at.length === 0) return 'REVOKED_KEY_UNDECIDABLE';
+    const boundary = Date.parse(at);
+    const issued = Date.parse(payload.ts);
+    if (!Number.isFinite(boundary) || !Number.isFinite(issued)) return 'REVOKED_KEY_UNDECIDABLE';
+    return issued >= boundary ? 'REVOKED_KEY' : 'REVOKED_KEY_UNDECIDABLE';
+  }
   if (entry.status === 'retired') {
     if (entry.retired_at && payload.ts
       && Date.parse(payload.ts) < Date.parse(entry.retired_at)) {
@@ -136,7 +183,8 @@ function deriveStatus(payload, entry, opts) {
   const now = opts.now != null ? opts.now : Date.now();
   if (payload.v === 4 && typeof payload.expires_at === 'string') {
     const exp = Date.parse(payload.expires_at);
-    if (isExpiredAt(exp, now, opts.context)) return 'VERIFIED_EXPIRED';
+    const context = opts.envelope || { environment: opts.expectedEnvironment };
+    if (isExpiredAt(exp, now, context)) return 'VERIFIED_EXPIRED';
   }
   if (opts.envelope) {
     const env = opts.envelope;
@@ -156,7 +204,7 @@ function deriveStatus(payload, entry, opts) {
  * @param {{ publicKey?: import('crypto').KeyObject, keyring?: Map<string,{publicKey:import('crypto').KeyObject}>, expectedKid: (string|null) }} ctx
  * @returns {{ valid: boolean, reason?: string, payload?: object }}
  */
-function verifyReceipt(token, ctx, opts = {}) {
+function verifyReceiptInner(token, ctx, opts = {}) {
   // 1. structure
   if (typeof token !== 'string' || token.length === 0) {
     return { valid: false, status: 'MALFORMED', reason: 'malformed_structure' };
@@ -214,10 +262,17 @@ function verifyReceipt(token, ctx, opts = {}) {
 
   // 7. taxonomy status (freshness / retirement / dormant field checks).
   const status = deriveStatus(payload, entry, opts);
+  if (status === 'KEY_REVOKED') {
+    return { valid: false, status, reason: 'KEY_REVOKED', payload };
+  }
+  if (status === 'KEY_RETIRED_AFTER_SIGNING') {
+    return { valid: false, status, reason: 'KEY_RETIRED_AFTER_SIGNING', payload };
+  }
   if (status === 'INVALID_SIGNATURE') {
     return { valid: false, status, reason: 'retired_key_after_issue', payload };
   }
   const valid = status === 'VERIFIED_CURRENT' || status === 'RETIRED_KEY_VALID_AT_ISSUE';
+  // UNKNOWN_KEY_STATUS is deliberately absent from the valid set — see deriveStatus.
   return { valid, status, payload };
 }
 
@@ -225,14 +280,14 @@ function verifyReceipt(token, ctx, opts = {}) {
  * Verify a chain of tokens (oldest first): every signature valid AND every non-genesis
  * link's prev == 'sha256:' + sha256hex(previous token string).
  */
-function verifyChain(tokens, ctx, opts = {}) {
+function verifyChainInner(tokens, ctx, opts = {}) {
   const links = [];
   let allValid = true;
   let first = null;
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    const res = verifyReceipt(token, ctx, opts);
+    const res = verifyReceiptInner(token, ctx, opts);
     const link = { index: i, signature_valid: res.valid };
     if (!res.valid) link.reason = res.reason;
     const prev = res.payload ? res.payload.prev : undefined;
@@ -265,17 +320,65 @@ function keyFromPem(pem) {
   return crypto.createPublicKey(pem);
 }
 
+/**
+ * Build a kid -> key map from a registry document
+ * ({ keys: [{ kid, public_key_pem, status, valid_from, retired_at }] }).
+ * Returns null when `keys` is missing/empty so the caller can try the legacy
+ * single-key body. --keys still requires a non-empty keys[] (throws).
+ */
+function keyringFromDocument(doc, source) {
+  const keys = doc && Array.isArray(doc.keys) ? doc.keys : null;
+  if (!keys || keys.length === 0) return null;
+  const keyring = new Map();
+  for (const k of keys) {
+    if (!k || !k.kid || !k.public_key_pem) throw new Error(`registry entry missing kid/public_key_pem in ${source}`);
+    // compromised_at MUST be carried through: deriveStatus reads it for the revoked rule
+    // (RECEIPT_FORMAT.md 7.1). Dropping it here made the rule inert — every revoked key
+    // returned UNDECIDABLE regardless of ts, which looks implemented and decides nothing.
+    keyring.set(k.kid, {
+      publicKey: keyFromPem(k.public_key_pem),
+      status: k.status || null,
+      retired_at: k.retired_at || null,
+      revoked_at: k.revoked_at || null,
+      compromised_at: k.compromised_at || null,
+    });
+  }
+  return keyring;
+}
+
+function pickActiveFromKeyring(keyring) {
+  for (const [kid, entry] of keyring) {
+    if (entry.status === 'active') return { kid, entry };
+  }
+  const first = keyring.entries().next().value;
+  return first ? { kid: first[0], entry: first[1] } : null;
+}
+
+/**
+ * Fetch a key document. Accepts BOTH shapes:
+ *   - registry: { keys: [{ kid, public_key_pem, status, retired_at, ...}] }
+ *   - legacy single-key: { kid, public_key_pem }  (/api/v1/attestation/public-key)
+ * Registry returns { publicKey, kid, keyring } (keyring carries retired keys).
+ * Legacy returns { publicKey, kid } — same as before, so --keys users + grant
+ * verifiers that read publicKey/kid stay byte-compatible.
+ */
 async function fetchKeyInfo(url) {
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`fetch ${url} -> HTTP ${res.status}`);
   const info = await res.json();
+  const keyring = keyringFromDocument(info, url);
+  if (keyring) {
+    const picked = pickActiveFromKeyring(keyring);
+    if (!picked) throw new Error(`no usable keys at ${url}`);
+    return { publicKey: picked.entry.publicKey, kid: picked.kid, keyring };
+  }
   if (!info || !info.public_key_pem) throw new Error(`no public_key_pem at ${url}`);
   return { publicKey: keyFromPem(info.public_key_pem), kid: info.kid || null };
 }
 
 /**
  * Build a kid -> key map from a CodeRifts key registry
- * ({ keys: [{ kid, public_key_pem, status, valid_from }] }). A --keys source may be
+ * ({ keys: [{ kid, public_key_pem, status, valid_from, retired_at }] }). A --keys source may be
  * an http(s) URL or a local file path. Both active and retired keys are loaded.
  */
 async function loadKeyring(source) {
@@ -288,13 +391,8 @@ async function loadKeyring(source) {
     text = fs.readFileSync(source, 'utf8');
   }
   const doc = JSON.parse(text);
-  const keys = doc && Array.isArray(doc.keys) ? doc.keys : null;
-  if (!keys || keys.length === 0) throw new Error(`no keys[] in registry ${source}`);
-  const keyring = new Map();
-  for (const k of keys) {
-    if (!k || !k.kid || !k.public_key_pem) throw new Error(`registry entry missing kid/public_key_pem in ${source}`);
-    keyring.set(k.kid, { publicKey: keyFromPem(k.public_key_pem), status: k.status || null, retired_at: k.retired_at || null });
-  }
+  const keyring = keyringFromDocument(doc, source);
+  if (!keyring) throw new Error(`no keys[] in registry ${source}`);
   return keyring;
 }
 
@@ -343,7 +441,14 @@ async function main() {
     process.stdout.write(USAGE);
     process.exit(2);
   }
-  if (!opts.chainFile && !opts.receipt) return fail('no receipt provided');
+  // Empty string from `$(curl -s … | grep …)` on GitHub 403/rate-limit is a common silent path
+  // when the homepage one-liner is used without HTTP status checks — fail honestly.
+  if (!opts.chainFile && (!opts.receipt || !String(opts.receipt).trim())) {
+    return fail(
+      'no receipt provided — if you fetched via unauthenticated GitHub comments, a 403 rate limit '
+      + 'yields an empty capture; try again in a minute, or paste the receipt token directly',
+    );
+  }
 
   // Resolve the verification key(s) + expected kid.
   let ctx;
@@ -358,8 +463,13 @@ async function main() {
       ctx = { publicKey: keyFromPem(pem), expectedKid: opts.kid };
     } else {
       const info = await fetchKeyInfo(opts.fetchUrl || DEFAULT_FETCH_URL);
-      // An explicit --kid overrides the discovered kid.
-      ctx = { publicKey: info.publicKey, expectedKid: opts.kid || info.kid };
+      if (info.keyring) {
+        // Registry shape: resolve each receipt by kid (retired window included).
+        ctx = { keyring: info.keyring, expectedKid: opts.kid };
+      } else {
+        // Legacy single-key body. An explicit --kid overrides the discovered kid.
+        ctx = { publicKey: info.publicKey, expectedKid: opts.kid || info.kid };
+      }
     }
   } catch (e) {
     return fail(`could not load public key: ${e.message}`);
@@ -381,13 +491,23 @@ async function main() {
     const raw = fs.readFileSync(opts.chainFile, 'utf8');
     const tokens = raw.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
     if (tokens.length === 0) return fail('chain file is empty');
-    result = verifyChain(tokens, ctx, verifyOpts);
+    result = verifyChainInner(tokens, ctx, verifyOpts);
   } else {
-    result = verifyReceipt(opts.receipt, ctx, verifyOpts);
+    result = verifyReceiptInner(opts.receipt, ctx, verifyOpts);
   }
 
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.valid ? 0 : 1);
+}
+
+function verifyReceipt(token, second, third) {
+  const { ctx, opts } = split3ary('verifyReceipt', arguments.length, second, third);
+  return verifyReceiptInner(token, ctx, opts);
+}
+
+function verifyChain(tokens, second, third) {
+  const { ctx, opts } = split3ary('verifyChain', arguments.length, second, third);
+  return verifyChainInner(tokens, ctx, opts);
 }
 
 // Reusable API — require('./verify') imports the pure verify logic WITHOUT running the CLI. The
@@ -402,8 +522,10 @@ module.exports = {
   canonicalJson,
   loadKeyring,
   keyFromPem,
+  keyringFromDocument,
   fetchKeyInfo,
   sha256hex,
+  DEFAULT_FETCH_URL,
   SIGNING_PREFIX,
   MAX_SUPPORTED_V,
   SIGNED_FIELDS,
