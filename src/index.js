@@ -78,13 +78,40 @@ const REASON = Object.freeze({
  * branches on them is unaffected. A reason that maps to no error class carries
  * no remedy rather than a guessed one.
  */
-const deny = (reason, detail, remedyFields) => {
+/**
+ * The decision's own remediation SUGGESTION, read from an envelope this process has
+ * ALREADY VERIFIED (I-1288f).
+ *
+ * The step lives inside decision_result, so decision_body_hash covers it and the receipt
+ * signs it — which is why a gateway may forward it without calling the issuer, and why
+ * this must never run before verifyReceipt returned valid. An unsigned step is an
+ * attacker-supplied instruction wearing the issuer's voice: the decision envelope arrives
+ * in a REQUEST HEADER here, so anyone who can reach the gateway can write one.
+ *
+ * Shape and closed action set: coderifts-app schemas/decision-result.v1.producer.json
+ * properties.next_agent_step. A step without an action is not a step (same rule as
+ * contract-gate readNextAgentStep).
+ */
+const readNextAgentStep = (envelope) => {
+  const step = envelope && typeof envelope === 'object' ? envelope.next_agent_step : null;
+  if (!step || typeof step !== 'object' || Array.isArray(step)) return null;
+  if (typeof step.action !== 'string' || step.action.length === 0) return null;
+  return step;
+};
+
+const deny = (reason, detail, remedyFields, verifiedEnvelope) => {
   const out = { allow: false, reason, ...(detail ? { detail } : {}) };
   const error = denyErrorForReason(reason);
   if (error) {
     const remedy = buildDenyRemedy({ error, ...(remedyFields || {}) });
     if (remedy) out.remedy = remedy;
   }
+  // TWO DIFFERENT NEXT STEPS, and they can co-occur. `remedy` is THIS GATEWAY's refusal
+  // class (the grant is missing, invalid, or scoped elsewhere). `next_step` is the
+  // DECISION's, signed by the issuer. Only call sites holding a VERIFIED envelope pass
+  // the fourth argument; every pre-verification refusal passes nothing.
+  const nextStep = readNextAgentStep(verifiedEnvelope);
+  if (nextStep) out.next_step = nextStep;
   return out;
 };
 
@@ -207,7 +234,7 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
 
   const executionAction = typeof envelope.execution_action === 'string' ? envelope.execution_action : null;
   if (!executionAction || !PASSING_ACTIONS.has(executionAction)) {
-    return deny(REASON.DECISION_NOT_ALLOW, executionAction);
+    return deny(REASON.DECISION_NOT_ALLOW, executionAction, undefined, envelope);
   }
 
   const scope = scopeMatches(envelope, intended);
@@ -227,6 +254,8 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
       });
       if (remedy) out.remedy = remedy;
     }
+    const nextStep = readNextAgentStep(envelope);
+    if (nextStep) out.next_step = nextStep;
     return out;
   }
 
@@ -270,6 +299,7 @@ function gatewayVerifier({ keyring, resolveIntent, headerNames = DEFAULT_HEADERS
 }
 
 module.exports = {
+  readNextAgentStep,
   checkRequest,
   gatewayVerifier,
   scopeMatches,

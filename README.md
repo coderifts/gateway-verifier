@@ -79,6 +79,21 @@ own that would be worthless. It is trustworthy only because step 4 binds the
 receipt to that exact envelope by body hash: swap the envelope and the receipt
 stops verifying. This never scope-checks before verifying.
 
+### What a 403 body carries
+
+| key | what it is |
+|---|---|
+| `remedy` | **this gateway's** refusal class — the grant is missing, invalid, or scoped elsewhere, and how to obtain one |
+| `next_step` | **the decision's** own `next_agent_step`, verbatim from the `decision_result` envelope |
+
+The two can co-occur; they answer different questions. `next_step` appears only when
+the receipt verified: the field lives inside `decision_result`, so `decision_body_hash`
+covers it and the receipt signs it. The envelope arrives in a request header, so anyone
+who can reach the gateway can write one — a refusal reached before verification, or one
+whose envelope was swapped after signing, renders no `next_step`.
+
+This is the decision's remediation suggestion, not permission; branch on `execution_action`.
+
 ## What it proves
 
 For an admitted request:
