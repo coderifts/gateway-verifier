@@ -39,11 +39,28 @@
 const { verifyReceipt } = require('./verify.js');
 const { unwrapReceiptInput } = require('./from-dsse.js');
 const { buildDenyRemedy, denyErrorForReason } = require('./deny-remedy.js');
+const { verifyExecutionGrant, receiptDigest } = require('./verify-grant.js');
 
 /** Header names. Overridable, because a gateway may already own a prefix. */
 const DEFAULT_HEADERS = Object.freeze({
   receipt: 'x-coderifts-receipt',
   decision: 'x-coderifts-decision',
+  /**
+   * OPTIONAL execution grant (1307).
+   *
+   * MEASURED before this: this verifier read a receipt and a decision envelope and nothing else. A
+   * receipt records that a decision was issued; a grant is the permission to act on it, bound to
+   * one executor, one target and one use.
+   *
+   * IT FITS THE REQUEST SHAPE, which was the open question. A compact grant is a base64url token of
+   * the same order as the receipt already carried here — ~700 bytes against the 8 KB per-header
+   * limit proxies typically enforce. Nothing about ext-authz prevented it; it simply was not read.
+   *
+   * ADDITIVE: absent → every existing verdict is byte-identical. Present → verified offline against
+   * the same pinned keyring and BOUND to the receipt in the sibling header. `requireGrant` turns
+   * absence into a refusal for operators who want the stronger posture.
+   */
+  grant: 'x-coderifts-grant',
 });
 
 /**
@@ -58,6 +75,9 @@ const PASSING_ACTIONS = new Set(['CONTINUE', 'CONTINUE_WITH_MONITORING']);
 /** Named refusal reasons. A gateway logs these; they are part of the contract. */
 const REASON = Object.freeze({
   RECEIPT_MISSING: 'receipt_missing',
+  GRANT_MISSING: 'grant_missing',
+  GRANT_INVALID: 'grant_invalid',
+  GRANT_NOT_BOUND: 'grant_not_bound',
   DECISION_MISSING: 'decision_missing',
   DECISION_MALFORMED: 'decision_malformed',
   DSSE_MALFORMED: 'dsse_malformed',
@@ -192,7 +212,10 @@ function scopeMatches(envelope, intended) {
  * @param {object}  [o.headerNames]
  * @param {Date}    [o.now]
  */
-function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADERS, now } = {}) {
+function checkRequest({
+  headers, intended, keyring, headerNames = DEFAULT_HEADERS, now,
+  requireGrant = false, grantKeyring = null,
+} = {}) {
   const rawReceipt = headerValue(headers, headerNames.receipt);
   const targetOf = (i) => (i && typeof i === 'object' && typeof i.target_uri === 'string'
     ? i.target_uri : null);
@@ -259,9 +282,49 @@ function checkRequest({ headers, intended, keyring, headerNames = DEFAULT_HEADER
     return out;
   }
 
+  // ── execution grant (1307) ────────────────────────────────────────────────────────────────
+  //
+  // LAST, after the receipt, the decision class and the scope. The grant is additional authority
+  // over the same request, never a second door: a request whose receipt fails is refused on the
+  // receipt no matter what grant it carries.
+  const rawGrant = headerValue(headers, headerNames.grant);
+  let grantStatus = null;
+  if (rawGrant != null && rawGrant !== '') {
+    let g;
+    try {
+      // MEASURED signature (verify-grant.js:227-233): (token, ctx, opts) — ctx carries
+      // { keyring, expectedKid }, opts carries { now }. Folding `now` into ctx makes the ring
+      // invisible to resolveEntry and every grant returns UNKNOWN_KEY.
+      //
+      // expectedKid null: accept any kid PRESENT IN THE PINNED RING. Rotation is additive; a kid
+      // the ring does not carry is UNKNOWN_KEY, which is fail-closed.
+      g = verifyExecutionGrant(
+        String(rawGrant),
+        { keyring: grantKeyring || keyring, expectedKid: null },
+        { now },
+      );
+    } catch (err) {
+      return deny(REASON.GRANT_INVALID, String((err && err.message) || 'verifier threw').slice(0, 200));
+    }
+    if (!g || g.valid !== true) {
+      return deny(REASON.GRANT_INVALID, (g && g.status) || null, { target: targetOf(intended) });
+    }
+    // THE BINDING. A valid grant for a different receipt is two true documents about two different
+    // things — and a proxy pairing any verified receipt with any verified grant would look complete.
+    const boundTo = g.payload && (g.payload.receipt_digest || g.payload.receipt_hash);
+    if (!boundTo || boundTo !== receiptDigest(unwrapped.token)) {
+      return deny(REASON.GRANT_NOT_BOUND, g.status, { target: targetOf(intended) });
+    }
+    grantStatus = g.status;
+  } else if (requireGrant === true) {
+    return deny(REASON.GRANT_MISSING, null, { target: targetOf(intended) });
+  }
+
   return {
     allow: true,
     receipt_status: result.status,
+    // Null means ABSENT, not failed — an invalid grant never reaches this line.
+    grant_status: grantStatus,
     execution_action: executionAction,
     receipt_form: unwrapped.form,
     // Named so a gateway operator is not left to infer it from a green result.

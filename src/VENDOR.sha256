@@ -2,3 +2,6 @@ receipt-verifier e6955a975c1356ee83c7b8fa187a529f0cadba53
 verify.js  c9a6ceac411b9f9feefb7ff4447dd7f5cf2f02a817f35caace68037d0c8e0d02
 arity.js   721fcac58b960b5e2aa1af91edb6cfc87ebe828a6da73879967ef79a1ca474e8
 test/fixtures/xlang-vectors.json  3c323e7469113093020498c8948185006783857e71ca01155d7cb10baedaf1a7
+
+# execution-grant verification (1307), vendored from receipt-verifier e11d3f5d9f5444d8b2a07428c922d2040f4819ce
+verify-grant.js  a285b021b32cc9c70c963de042154dc6be7175cdeaf722a88cc7699651a7c1ea
