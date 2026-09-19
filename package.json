@@ -6,6 +6,13 @@
   "main": "src/index.js",
   "files": ["src", "README.md", "LICENSE"],
   "engines": { "node": ">=18" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coderifts/gateway-verifier.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": { "test": "node --test test/*.test.js" },
   "dependencies": {}
 }
