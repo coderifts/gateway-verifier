@@ -1,5 +1,8 @@
 # CodeRifts gateway verifier
 
+Signed, offline-verifiable authorization for AI-agent contract changes. Only a
+granted change can proceed.
+
 Reject an API request unless it carries a CodeRifts receipt that **verifies** and
 whose **scope matches the request**.
 
@@ -12,10 +15,24 @@ Runs in your gateway. Offline, zero dependencies, keyring pinned by you.
 A **target verifier**. It checks evidence the caller already holds, then forwards
 or refuses.
 
+## What this proves / does not prove
+
+**Proves:** the receipt token is authentic under the **caller-pinned** keyring,
+unexpired for the configured clock, and the resolved intent (operation + target)
+matches the receipt scope.
+
+**Does not prove:** that the change was preflighted correctly; that
+`execution_action` was CONTINUE; that artifacts still match; that the upstream
+policy is right; that the keyring is fresh. A missing or unmapped route is
+refused, not waved through.
+
 It is **not** an analysis service. Nothing here asks whether a request is risky —
 that question is answered upstream, before the caller reaches you, and its answer
-is the receipt this checks. If you are looking for the analysis step, it is a
-different integration.
+is the receipt this checks.
+
+`publishConfig.access` is `"public"`. Whether to run `npm publish --access public`
+is Péter's decision. `@coderifts/gateway-verifier@0.1.0` is already on the npm
+registry (measured 2026-09-20).
 
 ## Install
 

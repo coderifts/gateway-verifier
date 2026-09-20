@@ -1,7 +1,7 @@
 {
   "name": "@coderifts/gateway-verifier",
-  "version": "0.1.0",
-  "description": "Reject an API request unless it carries a CodeRifts receipt that verifies and whose scope matches the request. Customer-hosted, offline, zero dependencies.",
+  "version": "0.1.1",
+  "description": "Reject a request unless a CodeRifts receipt verifies and matches its scope. Only a granted change can proceed.",
   "license": "MIT",
   "main": "src/index.js",
   "files": ["src", "README.md", "LICENSE"],
