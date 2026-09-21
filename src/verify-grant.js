@@ -58,6 +58,12 @@ const V2_REQUIRED_STRINGS = Object.freeze([
   'operation', 'target_uri', 'expected_state_token', 'after_payload_hash',
   'nonce_hash', 'policy_hash', 'audience_hash', 'not_before', 'expires_at',
 ]);
+/**
+ * RESERVED, AND INERT. Optional v2 fields a grant MAY carry and this verifier reads as NOTHING.
+ * Widened BY NAME, not opened: an actually-unknown field is still unknown_field.
+ * applied_policy_hash is 1942 verifier-admits — not interpreted, not bound, not required.
+ */
+const V2_RESERVED_INERT = Object.freeze(['call_hash', 'executor_image_digest', 'applied_policy_hash']);
 const TARGET_SCHEMES = Object.freeze(['fs', 'git', 'api', 'db', 'registry', 'deploy']);
 const DEFAULT_FETCH_URL = 'https://app.coderifts.com/api/v1/attestation/public-key';
 
@@ -142,7 +148,9 @@ function verifyExecutionGrantV2(payload, sigB64, ctx, opts = {}) {
   if (!Number.isInteger(payload.max_attempts) || payload.max_attempts < 1) {
     return { valid: false, status: 'MALFORMED', reason: 'bad_max_attempts', payload };
   }
-  const allowed = new Set([...V2_REQUIRED_STRINGS, 'max_attempts']);
+  // The reserved names are ADMITTED, never inspected. Everything below this line treats a payload
+  // carrying them identically to one that does not — verified by test, not by intent.
+  const allowed = new Set([...V2_REQUIRED_STRINGS, 'max_attempts', ...V2_RESERVED_INERT]);
   for (const k of Object.keys(payload)) {
     if (!allowed.has(k)) return { valid: false, status: 'MALFORMED', reason: 'unknown_field', payload };
   }
@@ -513,6 +521,8 @@ module.exports = {
   SIGNING_PREFIX,
   SIGNING_PREFIX_V2,
   SIGNED_FIELDS,
+  V2_REQUIRED_STRINGS,
+  V2_RESERVED_INERT,
   CLOCK_SKEW_LEEWAY_MS,
   isIssuedInFuture,
 };
