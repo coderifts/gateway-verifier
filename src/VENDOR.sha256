@@ -1,9 +1,8 @@
-receipt-verifier e6955a975c1356ee83c7b8fa187a529f0cadba53
-verify.js  363e52c72ec4b913e1f3edc8e2029848feaeacb1efa6c07960fe5e5f195c23b3
+receipt-verifier v1.0.3 523e0a2b822088990f500b9eea3868309439c53c
+verify.js  52d7c37611f9eecc862e3678d1ffcb4fd860ea4c5faf9a9df6d6d5b290bd8197
 arity.js   721fcac58b960b5e2aa1af91edb6cfc87ebe828a6da73879967ef79a1ca474e8
 test/fixtures/xlang-vectors.json  3c323e7469113093020498c8948185006783857e71ca01155d7cb10baedaf1a7
 
-# execution-grant verification (1307). Digest re-pinned 2026-09-21 for 1942 K-phase-1:
-# applied_policy_hash admitted as V2_RESERVED_INERT (inert; fail-closed otherwise unchanged).
-# Tagged receipt-verifier re-vendor is a release decision, not this working tree.
-verify-grant.js  388a921d9e0162d30f182617a7b95f3f360c82b164d1ddb20982d445099e582a
+# execution-grant verification (1307). Re-vendored from signed receipt-verifier v1.0.3
+# (peeled 523e0a2). applied_policy_hash is V2_RESERVED_INERT; fail-closed otherwise unchanged.
+verify-grant.js  ea55b8611d6f3bba2cb9c84d765ade15bb2afe2418499e2da6358ffb3faf6ad6
