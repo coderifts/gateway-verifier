@@ -1,11 +1,17 @@
 {
   "name": "@coderifts/gateway-verifier",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Reject a request unless a CodeRifts receipt verifies and matches its scope. Only a granted change can proceed.",
   "license": "MIT",
   "main": "src/index.js",
-  "files": ["src", "README.md", "LICENSE"],
-  "engines": { "node": ">=18" },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/coderifts/gateway-verifier.git"
@@ -13,6 +19,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "scripts": { "test": "node --test test/*.test.js" },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {}
 }
