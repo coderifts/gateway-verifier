@@ -254,6 +254,15 @@ function checkRequest({
       observed: { receipt_status: result ? result.status : null },
     });
   }
+  // P66 parity (contract-gate 0.11.9 src/receipt-version.js; receipt-verifier cli.js:333): only a v4
+  // receipt binds the envelope (bh) and carries expires_at. A v1–v3 receipt verifies, but the envelope
+  // beside it is unbound — anything could be written there. It is not authorization.
+  if (!result.payload || result.payload.v !== 4 || typeof result.payload.bh !== 'string' || !result.payload.bh) {
+    return deny(REASON.RECEIPT_INVALID, 'RECEIPT_VERSION_UNSUPPORTED', {
+      target: targetOf(intended),
+      observed: { receipt_version: result.payload ? result.payload.v : null },
+    });
+  }
 
   const executionAction = typeof envelope.execution_action === 'string' ? envelope.execution_action : null;
   if (!executionAction || !PASSING_ACTIONS.has(executionAction)) {
