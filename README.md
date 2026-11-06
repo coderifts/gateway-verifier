@@ -1,5 +1,9 @@
 # CodeRifts gateway verifier
 
+## Status
+
+Frozen at receipt-verifier **v1.2.1** (signed tag, peeled `e1a346b`), 2026-11-06. No further re-vendoring; security fixes only. The reference verifier is [`@coderifts/receipt-verifier`](https://github.com/coderifts/receipt-verifier).
+
 Signed, offline-verifiable authorization for AI-agent contract changes. Only a
 granted change can proceed.
 
