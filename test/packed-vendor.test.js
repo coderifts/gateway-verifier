@@ -2,7 +2,7 @@
 
 /**
  * The npm tarball, not the working tree, is what a consumer installs.
- * 0.1.2 must ship verify-grant.js that admits applied_policy_hash.
+ * 0.1.2 must ship verify-grant.js that admits applied_policy_hash; the v1.2.1 grant verifier still does.
  */
 
 const { describe, it } = require('node:test');
@@ -14,7 +14,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 
-describe('packed tarball carries the v1.0.3 grant verifier', () => {
+describe('packed tarball carries the v1.2.1 grant verifier', () => {
   it('npm pack includes src/verify-grant.js with applied_policy_hash on V2_RESERVED_INERT', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-pack-'));
     try {

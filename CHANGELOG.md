@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Re-vendor `verify.js` and `verify-grant.js` from the signed receipt-verifier **v1.2.1** (peeled `e1a346b`, tag object `e6dd547`; was v1.0.3). `arity.js` is byte-identical to the tag and did not move. The verdict changes this brings, by the receipt-verifier release that made them: 1.1.1 a v1–v3 receipt is not authorization (P66) and a non-string signed field is `MALFORMED`; 1.1.4 a receipt verified beside an envelope must be v4; 1.1.5 Ed25519 only, and the result names the key that verified; 1.1.6 `--as-of` audit evaluation, and expiry applies under a retired key; 1.1.7 strict JSON parse (duplicate keys, lone surrogates, non-finite numbers are `MALFORMED`), and in `verify-grant.js` a grant whose key has `revoked_at` refuses at every instant and grant bodies are parsed strictly; 1.1.8 an `--as-of` instant before the receipt's `ts` is `NOT_YET_VALID_AT_AS_OF`; 1.2.0 the RECEIPT_FORMAT §7.1 key-status order — a revoked key is `REVOKED_KEY` at every signing time and wins over `retired_at`, `REVOKED_KEY_UNDECIDABLE` is withdrawn, and a retired key signed before `retired_at` with no time anchor is `RETIRED_KEY_UNANCHORED`, **valid:true → valid:false** (was `RETIRED_KEY_VALID_AT_ISSUE`). The xlang corpus is regenerated with the receipt-verifier generator.
+
 ## 0.1.2 - 2026-09-21
 
 Re-vendor `verify.js` and `verify-grant.js` from the signed receipt-verifier **v1.0.3** (peeled `523e0a2`). The grant verifier admits `applied_policy_hash` as `V2_RESERVED_INERT` (1942: not interpreted, not bound, not required). A truly unknown field is still `MALFORMED/unknown_field`. Pin digest in `src/VENDOR.sha256` names the tag. Not a first publish — 0.1.0 and 0.1.1 are already on the public npm registry.
